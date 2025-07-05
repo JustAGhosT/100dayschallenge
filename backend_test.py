@@ -4,7 +4,7 @@ import requests
 import json
 import time
 import os
-from unittest import mock
+import pymongo
 import uuid
 from datetime import datetime, timedelta
 
@@ -18,23 +18,63 @@ with open('/app/frontend/.env', 'r') as f:
 API_URL = f"{BACKEND_URL}/api"
 print(f"Testing backend at: {API_URL}")
 
-# Mock data for testing
-MOCK_SESSION_ID = "mock-session-id-12345"
-MOCK_USER_DATA = {
+# Get MongoDB connection info from backend/.env
+with open('/app/backend/.env', 'r') as f:
+    env_vars = {}
+    for line in f:
+        if '=' in line:
+            key, value = line.strip().split('=', 1)
+            env_vars[key] = value.strip('"\'')
+
+MONGO_URL = env_vars.get('MONGO_URL', 'mongodb://localhost:27017')
+DB_NAME = env_vars.get('DB_NAME', 'test_database')
+
+# Connect to MongoDB directly for test setup
+mongo_client = pymongo.MongoClient(MONGO_URL)
+db = mongo_client[DB_NAME]
+
+# Test data
+TEST_USER = {
+    "id": str(uuid.uuid4()),
     "email": "test.user@example.com",
     "name": "Test User",
     "picture": "https://example.com/profile.jpg",
-    "session_token": "mock-jwt-token-12345"
+    "created_at": datetime.utcnow()
+}
+
+TEST_SESSION = {
+    "id": str(uuid.uuid4()),
+    "user_id": TEST_USER["id"],
+    "session_token": f"test-token-{uuid.uuid4()}",
+    "expires_at": datetime.utcnow() + timedelta(days=7),
+    "created_at": datetime.utcnow()
 }
 
 class BackendTests(unittest.TestCase):
     """Test suite for Challenge Tracker Platform backend APIs"""
     
-    def setUp(self):
-        """Set up test environment before each test"""
-        self.auth_token = None
-        self.challenge_id = None
-        self.project_id = None
+    @classmethod
+    def setUpClass(cls):
+        """Set up test environment once before all tests"""
+        # Create test user and session in database
+        db.users.delete_many({"email": TEST_USER["email"]})
+        db.users.insert_one(TEST_USER)
+        db.sessions.insert_one(TEST_SESSION)
+        
+        # Store auth token for all tests
+        cls.auth_token = TEST_SESSION["session_token"]
+        cls.user_id = TEST_USER["id"]
+        print(f"✅ Created test user and session in database")
+    
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up after all tests"""
+        # Clean up test data
+        db.users.delete_many({"id": cls.user_id})
+        db.sessions.delete_many({"user_id": cls.user_id})
+        db.challenges.delete_many({"user_id": cls.user_id})
+        db.projects.delete_many({"user_id": cls.user_id})
+        print(f"✅ Cleaned up test data from database")
     
     def test_01_health_check(self):
         """Test the health check endpoint"""
@@ -45,23 +85,9 @@ class BackendTests(unittest.TestCase):
         self.assertIn("timestamp", data)
         print("✅ Health check endpoint is working")
     
-    def test_02_auth_profile(self):
-        """Test the auth profile endpoint with direct token assignment"""
-        # Since we can't properly mock the external Emergent auth service,
-        # we'll directly assign a mock token for testing subsequent endpoints
-        
-        # In a real test environment, we would test the actual auth endpoint
-        # For now, we'll just set a mock token for testing other endpoints
-        mock_token = "mock-jwt-token-12345"
-        BackendTests.auth_token = mock_token
-        print(f"✅ Using mock auth token for testing: {mock_token}")
-    
-    def test_03_create_challenge(self):
+    def test_02_create_challenge(self):
         """Test creating a new challenge"""
-        if not hasattr(BackendTests, 'auth_token'):
-            self.skipTest("Auth token not available")
-        
-        headers = {"Authorization": f"Bearer {BackendTests.auth_token}"}
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
         challenge_data = {
             "title": "30-Day Coding Challenge",
             "description": "Build a new project every day for 30 days",
@@ -91,12 +117,9 @@ class BackendTests(unittest.TestCase):
         BackendTests.challenge_id = data["id"]
         print(f"✅ Create challenge endpoint is working, created challenge ID: {BackendTests.challenge_id}")
     
-    def test_04_get_challenges(self):
+    def test_03_get_challenges(self):
         """Test getting all challenges for the user"""
-        if not hasattr(BackendTests, 'auth_token'):
-            self.skipTest("Auth token not available")
-        
-        headers = {"Authorization": f"Bearer {BackendTests.auth_token}"}
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
         response = requests.get(f"{API_URL}/challenges", headers=headers)
         
         self.assertEqual(response.status_code, 200)
@@ -109,12 +132,9 @@ class BackendTests(unittest.TestCase):
         self.assertIn(BackendTests.challenge_id, challenge_ids)
         print("✅ Get challenges endpoint is working")
     
-    def test_05_get_challenge_by_id(self):
+    def test_04_get_challenge_by_id(self):
         """Test getting a specific challenge by ID"""
-        if not hasattr(BackendTests, 'auth_token') or not hasattr(BackendTests, 'challenge_id'):
-            self.skipTest("Auth token or challenge ID not available")
-        
-        headers = {"Authorization": f"Bearer {BackendTests.auth_token}"}
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
         response = requests.get(
             f"{API_URL}/challenges/{BackendTests.challenge_id}", 
             headers=headers
@@ -125,12 +145,9 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(data["id"], BackendTests.challenge_id)
         print("✅ Get challenge by ID endpoint is working")
     
-    def test_06_update_challenge(self):
+    def test_05_update_challenge(self):
         """Test updating a challenge"""
-        if not hasattr(BackendTests, 'auth_token') or not hasattr(BackendTests, 'challenge_id'):
-            self.skipTest("Auth token or challenge ID not available")
-        
-        headers = {"Authorization": f"Bearer {BackendTests.auth_token}"}
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
         update_data = {
             "title": "Updated 30-Day Coding Challenge",
             "description": "Updated description for the challenge",
@@ -155,12 +172,9 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(data["duration_days"], update_data["duration_days"])
         print("✅ Update challenge endpoint is working")
     
-    def test_07_create_project(self):
+    def test_06_create_project(self):
         """Test creating a new project within a challenge"""
-        if not hasattr(BackendTests, 'auth_token') or not hasattr(BackendTests, 'challenge_id'):
-            self.skipTest("Auth token or challenge ID not available")
-        
-        headers = {"Authorization": f"Bearer {BackendTests.auth_token}"}
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
         project_data = {
             "title": "Personal Portfolio Website",
             "description": "A responsive portfolio website showcasing my projects",
@@ -191,12 +205,9 @@ class BackendTests(unittest.TestCase):
         BackendTests.project_id = data["id"]
         print(f"✅ Create project endpoint is working, created project ID: {BackendTests.project_id}")
     
-    def test_08_get_challenge_projects(self):
+    def test_07_get_challenge_projects(self):
         """Test getting all projects for a challenge"""
-        if not hasattr(BackendTests, 'auth_token') or not hasattr(BackendTests, 'challenge_id'):
-            self.skipTest("Auth token or challenge ID not available")
-        
-        headers = {"Authorization": f"Bearer {BackendTests.auth_token}"}
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
         response = requests.get(
             f"{API_URL}/challenges/{BackendTests.challenge_id}/projects", 
             headers=headers
@@ -212,12 +223,9 @@ class BackendTests(unittest.TestCase):
         self.assertIn(BackendTests.project_id, project_ids)
         print("✅ Get challenge projects endpoint is working")
     
-    def test_09_get_project_by_id(self):
+    def test_08_get_project_by_id(self):
         """Test getting a specific project by ID"""
-        if not hasattr(BackendTests, 'auth_token') or not hasattr(BackendTests, 'project_id'):
-            self.skipTest("Auth token or project ID not available")
-        
-        headers = {"Authorization": f"Bearer {BackendTests.auth_token}"}
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
         response = requests.get(
             f"{API_URL}/projects/{BackendTests.project_id}", 
             headers=headers
@@ -228,12 +236,9 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(data["id"], BackendTests.project_id)
         print("✅ Get project by ID endpoint is working")
     
-    def test_10_update_project(self):
+    def test_09_update_project(self):
         """Test updating a project"""
-        if not hasattr(BackendTests, 'auth_token') or not hasattr(BackendTests, 'project_id'):
-            self.skipTest("Auth token or project ID not available")
-        
-        headers = {"Authorization": f"Bearer {BackendTests.auth_token}"}
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
         update_data = {
             "title": "Updated Portfolio Website",
             "description": "Updated description for the portfolio project",
@@ -262,15 +267,12 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(data["progress_percentage"], update_data["progress_percentage"])
         print("✅ Update project endpoint is working")
     
-    def test_11_check_url_monitoring(self):
+    def test_10_check_url_monitoring(self):
         """Test URL monitoring background job"""
-        if not hasattr(BackendTests, 'auth_token') or not hasattr(BackendTests, 'project_id'):
-            self.skipTest("Auth token or project ID not available")
-        
         # Wait a bit for the background job to complete
         time.sleep(2)
         
-        headers = {"Authorization": f"Bearer {BackendTests.auth_token}"}
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
         response = requests.get(
             f"{API_URL}/projects/{BackendTests.project_id}", 
             headers=headers
@@ -297,12 +299,9 @@ class BackendTests(unittest.TestCase):
         
         print("✅ URL monitoring background job is working")
     
-    def test_12_dashboard_analytics(self):
+    def test_11_dashboard_analytics(self):
         """Test dashboard analytics endpoint"""
-        if not hasattr(BackendTests, 'auth_token'):
-            self.skipTest("Auth token not available")
-        
-        headers = {"Authorization": f"Bearer {BackendTests.auth_token}"}
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
         response = requests.get(f"{API_URL}/dashboard", headers=headers)
         
         self.assertEqual(response.status_code, 200)
@@ -335,12 +334,9 @@ class BackendTests(unittest.TestCase):
         
         print("✅ Dashboard analytics endpoint is working")
     
-    def test_13_delete_project(self):
+    def test_12_delete_project(self):
         """Test deleting a project"""
-        if not hasattr(BackendTests, 'auth_token') or not hasattr(BackendTests, 'project_id'):
-            self.skipTest("Auth token or project ID not available")
-        
-        headers = {"Authorization": f"Bearer {BackendTests.auth_token}"}
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
         response = requests.delete(
             f"{API_URL}/projects/{BackendTests.project_id}", 
             headers=headers
