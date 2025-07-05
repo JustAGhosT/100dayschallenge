@@ -15,6 +15,14 @@ import asyncio
 from enum import Enum
 import requests
 import json
+from bson import ObjectId
+
+# Custom JSON encoder for MongoDB ObjectId
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, ObjectId):
+            return str(obj)
+        return super().default(obj)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -112,6 +120,34 @@ class ProjectUpdate(BaseModel):
     tech_stack: Optional[List[str]] = None
     status: Optional[ProjectStatus] = None
     progress_percentage: Optional[int] = None
+
+# Helper function to convert MongoDB documents to serializable format
+def serialize_mongo_doc(doc):
+    """Convert MongoDB document to serializable format"""
+    if doc is None:
+        return None
+    
+    if isinstance(doc, list):
+        return [serialize_mongo_doc(item) for item in doc]
+    
+    if isinstance(doc, dict):
+        result = {}
+        for key, value in doc.items():
+            if isinstance(value, ObjectId):
+                result[key] = str(value)
+            elif isinstance(value, (datetime, list, dict)):
+                result[key] = serialize_mongo_doc(value)
+            else:
+                result[key] = value
+        return result
+    
+    if isinstance(doc, ObjectId):
+        return str(doc)
+    
+    if isinstance(doc, datetime):
+        return doc.isoformat()
+    
+    return doc
 
 # Auth functions
 async def get_current_user(authorization: HTTPAuthorizationCredentials = Depends(security)):
@@ -385,10 +421,14 @@ async def delete_project(
 @api_router.get("/dashboard")
 async def get_dashboard(current_user: User = Depends(get_current_user)):
     # Get user's challenges
-    challenges = await db.challenges.find({"user_id": current_user.id}).to_list(1000)
+    challenges_cursor = db.challenges.find({"user_id": current_user.id})
+    challenges = await challenges_cursor.to_list(1000)
+    challenges = serialize_mongo_doc(challenges)
     
     # Get user's projects
-    projects = await db.projects.find({"user_id": current_user.id}).to_list(1000)
+    projects_cursor = db.projects.find({"user_id": current_user.id})
+    projects = await projects_cursor.to_list(1000)
+    projects = serialize_mongo_doc(projects)
     
     # Calculate stats
     total_challenges = len(challenges)
@@ -411,8 +451,11 @@ async def get_dashboard(current_user: User = Depends(get_current_user)):
         for tech in project.get("tech_stack", []):
             tech_stack_counts[tech] = tech_stack_counts.get(tech, 0) + 1
     
+    # Serialize user data
+    user_data = serialize_mongo_doc(current_user.dict())
+    
     return {
-        "user": current_user,
+        "user": user_data,
         "stats": {
             "total_challenges": total_challenges,
             "active_challenges": active_challenges,
