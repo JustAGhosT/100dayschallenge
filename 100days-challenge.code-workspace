@@ -1,0 +1,51 @@
+{
+  "folders": [
+    {
+      "name": "✨ 100 Days Challenge",
+      "path": "."
+    },
+    {
+      "name": "🌐 Frontend",
+      "path": "frontend"
+    },
+    {
+      "name": "⚙️ Backend",
+      "path": "backend"
+    },
+    {
+      "name": "🧪 Tests",
+      "path": "tests"
+    }
+  ],
+  "settings": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.codeActionsOnSave": {
+      "source.fixAll.eslint": true
+    },
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "typescript.enablePromptUseWorkspaceTsdk": true,
+    "files.exclude": {
+      "**/.git": true,
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/build": true,
+      "**/.netlify": true
+    },
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/build": true,
+      "**/.netlify": true
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "dbaeumer.vscode-eslint",
+      "esbenp.prettier-vscode",
+      "bradlc.vscode-tailwindcss",
+      "ms-vscode.vscode-typescript-next",
+      "netlify.netlify-vscode-extension"
+    ]
+  }
+}
