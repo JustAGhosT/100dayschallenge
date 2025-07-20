@@ -1,0 +1,177 @@
+summarize_my_pr:
+  inputs:
+    - pull_request
+  outputs:
+    - summary
+  steps:
+    - action: bash
+      inputs:
+        command: 'git diff {{ pull_request.base_commit_sha }}'
+      outputs:
+        stdout: pr_diff
+    - action: prompt
+      inputs:
+        instructions: "Express yourself in beautiful markdown, mostly with line items, each prefixed with an emoji."
+        prompt:
+          param:
+            name: SUMMARY_PROMPT
+            default: |
+              Summarize the changes in the pull request for each file, with concrete line items,
+              prefix the line items with emoji to semantically highlight the contents of the changes.
+              The file may have been trimmed, there will be a `... (trimmed) ...` line in the diff if so.
+        prompt_context:
+          - var: pr_diff
+            heading: 'Diff of the changes in the pull request'
+      outputs:
+        result: summary
+
+summarize_pr:
+  inputs:
+    - pull_request
+  steps:
+    - workflow: summarize_my_pr
+      inputs:
+        pull_request:
+          var: pull_request
+      outputs:
+        summary: summary
+    - action: comment
+      inputs:
+        comment:
+          var: summary
+
+
+# Request reviewers based on PR labels
+assign_reviewers:
+  inputs:
+    - pull_request
+    - reviewers
+  steps:
+    - action: github_api
+      inputs:
+        method: post
+        path: "/repos/{{ pull_request.base.repo.full_name }}/pulls/{{ pull_request.number }}/requested_reviewers"
+        data:
+          reviewers:
+            var: reviewers
+
+# Update CHANGELOG on merged pull requests
+update_changelog:
+  inputs:
+    - pull_request
+  steps:
+    - action: bash
+      inputs:
+        command: "git log -1 --pretty=format:'- %s (%h)' {{ pull_request.merge_commit_sha }}"
+      outputs:
+        stdout: commit_line
+    - action: bash
+      inputs:
+        command: |
+          echo \"${commit_line}\" >> CHANGELOG.md
+          git add CHANGELOG.md
+          git commit -m 'docs: update changelog'
+
+# Generate release notes from recent commits
+deploy_release_notes:
+  inputs:
+    - tag
+  outputs:
+    - notes
+  steps:
+    - action: bash
+      inputs:
+        command: "git log $(git describe --tags --abbrev=0 {{ tag }}^)..{{ tag }} --pretty=format:'%s'"
+      outputs:
+        stdout: commit_messages
+    - action: prompt
+      inputs:
+        instructions: "Summarize commit messages into release notes"
+        prompt_context:
+          - var: commit_messages
+            heading: 'Commits since last tag'
+      outputs:
+        result: notes
+    - action: github_api
+      inputs:
+        method: post
+        path: "/repos/{{ tag.repository.full_name }}/releases"
+        data:
+          tag_name: {{ tag.name }}
+          name: {{ tag.name }}
+          body:
+            var: notes
+
+# Audit dependencies on a schedule
+dependency_audit:
+  steps:
+    - action: bash
+      inputs:
+        command: 'npm audit --json'
+      outputs:
+        stdout: audit_output
+        exit_code: audit_exit
+    - action: bash
+      when: audit_exit != 0
+      inputs:
+        command: |
+          echo "Security issues found" > audit_summary.txt
+          echo "${audit_output}" >> audit_summary.txt
+          gh issue create --title 'Dependency audit issues' --body-file audit_summary.txt
+
+# Triage new issues with a language model
+issue_triage:
+  inputs:
+    - issue
+  steps:
+    - action: prompt
+      inputs:
+        instructions: "Suggest labels for this issue based on its content"
+        prompt_context:
+          - var: issue.body
+            heading: 'Issue body'
+      outputs:
+        result: suggested_labels
+    - action: github_api
+      inputs:
+        method: post
+        path: "/repos/{{ issue.repository.full_name }}/issues/{{ issue.number }}/labels"
+        data:
+          labels:
+            var: suggested_labels
+triggers:
+  - type: label
+    label_substring: "summarize"
+    on_pull_request: true
+    run: summarize_pr
+  - type: label
+    label_substring: "backend"
+    on_pull_request: true
+    run: assign_reviewers
+    with:
+      reviewers:
+        - backend-team
+  - type: label
+    label_substring: "frontend"
+    on_pull_request: true
+    run: assign_reviewers
+    with:
+      reviewers:
+        - frontend-team
+  - type: label
+    label_substring: "documentation"
+    on_pull_request: true
+    run: assign_reviewers
+    with:
+      reviewers:
+        - docs-team
+  - type: pull_request
+    merged: true
+    run: update_changelog
+  - type: tag
+    run: deploy_release_notes
+  - type: schedule
+    cron: "0 3 * * *"
+    run: dependency_audit
+  - type: issue
+    run: issue_triage
