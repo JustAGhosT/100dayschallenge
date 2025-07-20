@@ -6,7 +6,7 @@ summarize_my_pr:
   steps:
     - action: bash
       inputs:
-        command: 'git diff {{ pull_request.base_commit_sha }}'
+        command: 'git diff {{ pull_request.base_commit_sha }}..HEAD'
       outputs:
         stdout: pr_diff
     - action: prompt
