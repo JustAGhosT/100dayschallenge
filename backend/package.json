@@ -11,7 +11,7 @@
   "dependencies": {
     "@netlify/functions": "^2.0.0",
     "mongodb": "^5.7.0",
-    "uuid": "^9.0.0"
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.3",
